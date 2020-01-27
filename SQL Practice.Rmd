@@ -1,0 +1,185 @@
+---
+title: "SQL Practice"
+author: "Daniel South"
+date: "January 26, 2020"
+output: html_document
+---
+SQL Practice
+
+====================== PART ONE - INTRO ==================
+
+```{r}
+library(RSQLite)
+library(DBI)
+
+# establish a connection
+dbcon <- dbConnect(SQLite(), dbname = "SQL1.sqlite")
+dbSendQuery(dbcon, "DROP TABLE Exch") # run but ignore
+# list tables in SQL1
+dbListTables(dbcon) # CA, POP2006, POP2011, Winter0
+```
+
+
+Winter Olympics Data
+```{r}
+# examine WinterO
+tableQuery <- "PRAGMA table_info('WinterO')"
+dbGetQuery(dbcon, tableQuery)
+
+# see different olympics by year and venue ordered by place
+sql_events1 <- "SELECT DISTINCT year, place FROM WinterO ORDER BY place DESC"
+dbGetQuery(dbcon, sql_events)
+
+# show place/year of winter olympics by year descending
+sql_events2 <- "SELECT DISTINCT year, place FROM WinterO ORDER BY year DESC"
+dbGetQuery(dbcon, sql_events2)
+
+# unique set of medal winning countries sorted a to z
+sql_countries <- "SELECT DISTINCT Country FROM WinterO ORDER BY Country ASC"
+dbGetQuery(dbcon, sql_countries)
+
+# look for athletes and their countries whose last names start with first two letters of my last name (South)
+sql_name <- "SELECT DISTINCT Country, Athlete FROM WinterO WHERE Athlete LIKE 'SO%' ORDER BY Country"
+dbGetQuery(dbcon, sql_name)
+
+#### dbSendQuery and dbFetch
+# dbSendQuery and dbFetch allow you to make a query without immediately pulling all of the results so you don't need to load all of the results into R
+# don't forget to use dbClearResult to clear your query and avoid lost memory to old querries
+sql_SendAndFetch <- "SELECT Event, Athlete, year FROM WinterO WHERE Country=='Canada' ORDER BY Year DESC"
+QuerySent <- dbSendQuery(dbcon, sql_SendAndFetch)
+dbFetch(QuerySent, 2)
+dbFetch(QuerySent, 2)
+dbFetch(QuerySent, 2)
+dbFetch(QuerySent, -1)
+dbClearResult(QuerySent)
+
+#### inserting info into your tables
+# db send query
+# make myself an olympian who stood the test of time in a somewhat unreasonable manner
+dbInsertSouth <- "INSERT INTO WinterO (place, year, Country, Medal, Event, Athlete, Record)
+  VALUES('Calgary', '1988','United States of America', 'Gold', 'Half-pipe men', 'Daniel South', ''),
+('Vancouver', '2010', 'United States of America', 'Silver','Giant parallel slalom men','Daniel South',''), ('Sochi', '2014', 'United States of America', 'Bronze', 'Snowboard Cross Men', 'Daniel South', '' )"
+dbSendQuery(dbcon, dbInsertSouth)
+sql_south <- "SELECT * FROM WinterO WHERE Athlete LIKE '% South'"
+dbGetQuery(dbcon, sql_south)
+# apparently I am the only medaling athlete with my last name
+
+# going to delete this now though
+sql_deleteSouth <- "DELETE FROM WinterO WHERE Athlete LIKE '%South'"
+dbGetQuery(dbcon, sql_deleteSouth)
+# check that it worked (it did)
+dbGetQuery(dbcon, sql_south)
+
+```
+
+
+
+Move Onto Census Data with CA Data
+```{r}
+#### find population of each province from 2006 Census
+## use some math tools as well as inner join // both very useful for examing data especially linked
+# examine these databases
+tableQuery2006 <- "PRAGMA table_info('POP2006')"
+dbGetQuery(dbcon, tableQuery2006)
+tableQueryCA <- "PRAGMA table_info('CA')"
+dbGetQuery(dbcon, tableQueryCA)
+
+
+sql_provPop <- "SELECT Province, sum(Population__2006) AS Province_pop FROM CA INNER JOIN POP2006 ON CA.Geographic_name=POP2006.Geographic_name GROUP BY Province"
+provpops = dbGetQuery(dbcon, sql_provPop)
+provpops
+
+### create a density plot for postal code populations in BC in 2011
+sql_postalPop <- "SELECT POP2011.Geographic_name, Province, CA.ID, sum(Population__2011) AS Province_Pop FROM CA INNER JOIN POP2011 ON CA.Geographic_name=POP2011.Geographic_name GROUP BY CA.ID HAVING Province=='British Columbia'"
+postalPops <- dbGetQuery(dbcon, sql_postalPop)
+head(postalPops)
+postalPops$Geographic_name <- as.factor(postalPops$Geographic_name)
+
+popDensity <- postalPops$Province_Pop~postalPops$ID
+
+{par(mar=c(5,5,3,2)+0.1,mgp=c(4,1,0))
+plot(popDensity, type="p", las=2, main="BC Population \n by Postal ID", ylab="Population",xlab="BC Postal Codes")}
+dbDisconnect(dbcon)
+```
+
+============== END PART 1 ======================
+
+================= PART 2 ===================
+NEW DATA SQL2.sqlite
+
+```{r}
+# establish a connection
+dbcon <- dbConnect(SQLite(), dbname = "SQL2.sqlite")
+dbSendQuery(dbcon, "DROP VIEW usaS") # run & ignore
+dbSendQuery(dbcon, "DROP VIEW usaW") # run & ignore
+dbSendQuery(dbcon, "DROP VIEW usameds") # run & ignore
+# list tables in SQL1
+dbListTables(dbcon) # CHN2004_meds, Olymp_meds, POP,  WinterO
+
+db_tableinfo = "PRAGMA table_info('Olymp_meds')"
+dbGetQuery(dbcon, db_tableinfo)
+
+# medal count each winter olympics by year
+medCount1 <- "SELECT year, Count(year) AS TotalNumber FROM WinterO GROUP BY year"
+out = dbGetQuery(dbcon, medCount1)
+
+# create virtual table (VIEW) to house this query without bringing results into R
+# (remember send query and fetch query)
+medCount2 = "CREATE VIEW tot_meds AS SELECT year,
+Count(year) AS TotalNumber FROM WinterO GROUP BY year"
+dbSendQuery(dbcon, medCount2)
+# check that it sent
+meds <- dbGetQuery(dbcon, "SELECT * FROM tot_meds")
+
+### create moving average
+check = "SELECT * FROM tot_meds AS t,
+(SELECT t1.year, AVG(t2.TotalNumber) AS mavg
+FROM tot_meds AS t1, tot_meds AS t2
+WHERE t2.year BETWEEN (t1.year-4) AND (t1.year+4)
+GROUP BY t1.Year) sq WHERE (t.year = sq.year)"
+movingAvg = dbGetQuery(dbcon, check)
+
+{
+  plot(x=meds$year,y=meds$TotalNumber, type='p', 
+       main="Total Medals per Olympics with Moving Avg Overlaid in Blue")
+  lines(x=meds$year, y=meds$TotalNumber, type='l')
+  lines(x=movingAvg$year, y=movingAvg$mavg, type='l', col="blue")
+}
+
+# delete it
+dbSendQuery(dbcon, "drop view tot_meds")
+
+### create new tables
+# usa summer olympic medals
+usa_S = "CREATE VIEW usaS AS SELECT DISTINCT Event, Gender, Medal, Discipline, Edition AS year FROM Olymp_meds WHERE NOC='USA'"
+dbSendQuery(dbcon, usa_S)
+summer = as.data.frame(dbGetQuery(dbcon, "SELECT * FROM usaS"))
+
+# usa winter olympic medals
+usa_W = "CREATE VIEW usaW AS SELECT DISTINCT Event, Medal, year FROM WinterO WHERE Country=='United States of America' "
+dbSendQuery(dbcon, usa_W)
+winter = as.data.frame(dbGetQuery(dbcon, "SELECT * FROM usaW"))
+
+# combine for both olympics UNION ALL
+usameds = "CREATE VIEW usameds AS SELECT DISTINCT year, Medal FROM usaS UNION ALL SELECT DISTINCT year, Medal from usaW"
+dbSendQuery(dbcon, usameds)
+# check
+dbGetQuery(dbcon, "SELECT * FROM usameds")
+
+dbDisconnect(dbcon)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
